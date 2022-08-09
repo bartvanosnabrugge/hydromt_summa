@@ -1,0 +1,60 @@
+era5_landsurfacemodel_params:
+  path: forcing_merged_era5_hr.nc
+  data_type: RasterDataset
+  driver: netcdf
+  kwargs:
+    chunks: {time: 100, longitude: 120, latitude: 125 }
+    decode_times: True
+    parallel: True
+  crs: 4326
+  rename:
+    t: airtemp
+    q: spechum
+    u: wind-u
+    v: wind-v
+    msdwlwrf: LWRadAtm
+    msdwswrf: SWRadAtm
+    mtpr: pptrate
+    sp: airpres
+  meta:
+    category: meteo
+    history: Extracted from Copernicus Climate Data Store by CWARHM
+    source_version: ERA5 hourly data on pressure levels
+    source_url: https://doi.org/10.24381/cds.bd0915c6
+    paper_ref: Hersbach et al. (2019)
+    paper_doi: 10.1002/qj.3803
+    source_license: https://cds.climate.copernicus.eu/cdsapp/#!/terms/licence-to-use-copernicus-products
+
+usda_soilclass:
+  path: soil_classes.tif
+  data_type: RasterDataset
+  driver: raster
+  crs: 4326
+  rename:
+    usda_mode_soilclass_250m_ll: soilclass
+  meta:
+    category: soil
+    notes: Soilgrids data preprocessed into classes by Wouter Knoben
+    paper_doi: 10.4211/hs.1361509511e44adfba814f6950c6e742
+    paper_ref: Knoben, W. J. M. (2021)
+    source_license: ODbL
+    source_url: https://www.isric.org/explore/soilgrids/faq-soilgrids-2017
+    source_version: 2017
+
+modis_landclass_mode:
+  path: land_classes.tif
+  data_type: RasterDataset
+  driver: raster
+  crs: 4326
+  meta:
+    category: landuse & landcover
+    notes: this dataset has been generated with CWARHM
+
+modis_landclass_MCD12Q1:
+  path: domain_MCD12Q1_2001_2018.tif
+  data_type: RasterDataset
+  driver: raster
+  crs: 4326
+  meta:
+    category: landuse & landcover
+    notes: this dataset has been generated with CWARHM

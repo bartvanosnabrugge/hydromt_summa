@@ -1,0 +1,70 @@
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "hydromt_summa"
+authors = [
+    {name = "Bart van Osnabrugge", email = "bart.vanosnabrugge@usask.ca"},
+]
+dependencies = [
+	"hydromt",
+    "affine",
+    "bottleneck",
+    "click",
+    "dask",
+    "geopandas>=0.10",
+    "entrypoints",
+    "gdal>=3.1",
+    "numba",
+    "numpy",
+    "netcdf4",
+    "pandas",
+    "pyflwdir>=0.5.4",
+    "pygeos",
+    "openpyxl",
+    "rasterio",
+    "requests",
+    "scipy",
+    "xarray",
+    "zarr",
+]
+requires-python = ">=3.8" # fix tests to support older versions
+readme = "README.rst"
+classifiers = [
+    # https://pypi.python.org/pypi?%3Aaction=list_classifiers
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Hydrology",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+]
+dynamic = ['version', 'description']
+
+[project.optional-dependencies]
+test = [
+	"pytest>=2.7.3",
+	"pytest-cov",
+	"black",
+]
+doc = [
+	"sphinx",
+	"sphinx_rtd_theme",
+	"black",
+]
+
+[project.urls]
+Documentation = "https://github.com/Deltares/hydromt_summa"
+Source = "https://github.com/Deltares/hydromt_summa"
+
+[project.entry-points."hydromt.models"]
+summa = "hydromt_summa.summa:SummaModel"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.flit.sdist]
+include = ["hydromt_summa"]
+exclude = ["docs", "examples", "envs", "tests", "binder", ".github"]

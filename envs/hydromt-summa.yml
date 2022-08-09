@@ -1,0 +1,50 @@
+name: hydromt-summa
+
+channels:
+  - conda-forge
+
+# note that these are the developer dependencies,
+# if you only want the user dependencies, see
+# install_requires in setup.py
+dependencies:
+  - affine
+  - click
+  - black
+  - bottleneck
+  - cartopy # to run examples
+  - dask
+  - descartes # to run examples
+  - entrypoints
+  - flit>=3.4
+  - gdal>=3.1
+  - geopandas>=0.10
+  - jupyter # to run examples
+  - netcdf4
+  - matplotlib # to run examples
+  - nbsphinx # docs notebook examples
+  - numba
+  - numpy
+  - openpyxl
+  - pandas
+  - pcraster # TODO make optional
+  - pip
+  - pydata-sphinx-theme
+  - pyflwdir>=0.5.3
+  - pygeos>=0.8
+  - pytest # tests
+  - pytest-cov # tests
+  - pytest-benchmark # tests
+  - python>=3.7
+  - rasterio
+  - requests
+  - scipy
+  - toml
+  - sphinx # docs
+  - xarray
+  - zarr
+  - pip:
+    - hydroengine
+    - sphinx_design  # docs
+    - sphinx_autosummary_accessors  # docs
+    - git+https://github.com/Deltares/hydromt.git
+
