@@ -2,12 +2,17 @@
 # FIXME implement model class following model API
 
 import glob
+import os
 from os.path import join, basename
 import logging
 import pyproj
 import geopandas as gpd
 import xarray as xr
+import numpy as np
+from scipy import stats
 
+import pandas as pd
+import shutil
 import hydromt
 from hydromt.models.model_lumped import LumpedModel
 from hydromt import gis_utils, io
@@ -26,7 +31,7 @@ class SummaModel(LumpedModel):
     _GEOMS = {}
     _MAPS = {}
     _FORCING = {}
-    _FOLDERS = ["output"]
+    _FOLDERS = ["response_units","output"]
     _MODELFILES = []
 
 
@@ -49,111 +54,124 @@ class SummaModel(LumpedModel):
         
 
     ## components
-
-    def setup_basemaps(self, region, res=1000, crs="utm", basemaps_fn="merit_hydro"):
-        """BOILERPLATE FUNCTION Define model region and geometries.
-
-        Adds model layers:
-
-        * **dem** map: elevation [m+ref]
-        * **basins** geom: basins or HRU shape vector
-
-        Parameters
-        ----------
-        region : dict
-            Dictionary describing region of interest, e.g. {'bbox': [xmin, ymin, xmax, ymax]}
-            See :py:meth:`~hydromt.cli.parse_region()` for all options
-        res : float
-            Model resolution [m], by default 100 m.
-        crs : str, int
-            Model Coordinate Reference System as epsg code, by default 'utm' in which
-            case the region centroid UTM zone is used.
-        basemaps_fn : str
-            Path or data source name for hydrography raster data, by default 'hydro_merit'.
-
-            * Required variables: ['elevtn'].
-        """
-        # read data (lazy!) and return dataset
-        ds_org = self.data_catalog.get_rasterdataset(
-            basemaps_fn, single_var_as_array=False, variables=["elevtn"]
-        )
-        geom = region.get("geom", None)
-        bbox = region.get("bbox", None)
-        if geom is None and bbox is None:
-            self.logger.error("Plugin model requires a 'bbox' or 'geom' region.")
-        # parse dst_crs. if 'utm' the best utm zone is calculated based on bbox_epsg4326
-        bbox_epsg4326 = bbox if bbox is not None else geom.to_crs(4326).total_bounds
-        dst_crs = gis_utils.parse_crs(crs, bbox_epsg4326)
-        self.set_config("global.epsg", dst_crs.to_epsg())
-        # transfrom bbox/geom to geom with destination CRS to deal with nonlinear
-        # transformations along domain edges when clipping
-
-        if geom is not None:
-            # to epsg required to be understood when writing GEOJSON
-            dst_geom = geom.to_crs(dst_crs.to_epsg())
-        else:
-            dst_bbox = transform_bounds(pyproj.CRS.from_epsg(4326), dst_crs, *bbox)
-            dst_geom = gpd.GeoDataFrame(geometry=[box(*dst_bbox)], crs=dst_crs)
-        # reproject to destination CRS and clip to actual extent
-        da_elv_org = ds_org["elevtn"].raster.clip_geom(geom=dst_geom, buffer=5)
-        da_elv_proj = da_elv_org.raster.reproject(
-            dst_res=res, dst_crs=dst_crs, align=True, method="average"
-        )
-        da_elv = da_elv_proj.raster.clip_geom(dst_geom, align=res)
-        # set elevation map
-        self.set_staticmaps(da_elv, self._MAPS["elevtn"])
+    def setup_forcing(
+        self,
+        forcing_fn,
+        **zonal_stats_kwargs    
+    ):
+        response_units = hydromt.workflows.ru_geometry_to_gpd(self.response_units)
+        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=response_units)
+        ds_zstats = ds_forcing.raster.zonal_stats(response_units,'mean',**zonal_stats_kwargs)
+        ds_zstats['index'] = (["index"], response_units['value'])
+        self.set_forcing(ds_zstats, name="forcing")
+        
+    def setup_soilclass(
+        self,
+        soilclass_fn,
+        **zonal_stats_kwargs
+    ):
+        rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
+        ds_soil = self.data_catalog.get_rasterdataset(soilclass_fn,geom=rus)
+        ds_zstats = ds_soil.raster.zonal_stats_per_class(rus,np.unique(ds_soil),
+                        stat='count', class_dim_name='soil')
+        ds_zstats['index'] = (["index"], rus['value'])
+        # and calculate fractions
+        fracs = hydromt.workflows.fracs(ds_zstats,'soil_classes_count','soil')
+        soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'soil_classes_count','soil')
+        
+        self.set_response_units(fracs, name='soil_fraction')
+        self.set_response_units(soil_mode, name='soil_mode')
+        
+    def setup_landclass(
+        self,
+        landclass_fn,
+        **zonal_stats_kwargs
+    ):
+        rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
+        ds_class = self.data_catalog.get_rasterdataset(landclass_fn,geom=rus)
+        ds_zstats = ds_class.raster.zonal_stats_per_class(rus,np.unique(ds_class),
+                        stat='count', class_dim_name='landclass')
+        ds_zstats['index'] = (["index"], rus['value'])
+        # and calculate fractions
+        fracs = hydromt.workflows.fracs(ds_zstats,'land_classes_count','landclass')
+        soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'land_classes_count','landclass')
+        
+        self.set_response_units(fracs, name='landclass_fraction')
+        self.set_response_units(soil_mode, name='landclass_mode')
     
-    def setup_basins(self, basins_fn, **kwargs):
-        """Setup model basin geometries
-
-        Adds model layers:
-
-        * **basins** geom: basin geometries
-
-        Parameters
-        ----------
-        basins_fn: str
-            Path to basin geometry file.
-            See :py:meth:`~hydromt.open_vector`, for accepted files.
-        """
-        name = self._GEOMS["geom"]     
-        gdf = self.data_catalog.get_geodataframe(
-            basins_fn, geom=self.region, **kwargs
-            ).to_crs(self.crs)
-        self.set_staticgeoms(gdf,name)
-        self.logger.info(f"{name} set based on {basins_fn}")
-
-    def setup_drainage_db():
-        # create SUMMA topology
-        mcl.generate_mesh_topology(control_options['river_network_shp_path'], 
-            control_options['river_basin_shp_path'],
-            drain_db_path,
-            control_options['settings_make_outlet'])
-        ranks, drain_db = mcl.reindex_topology_file(drain_db_path)
-
-
-    def setup_gauges(self, gauges_fn=None, **kwargs):
-        """BOILERPLATE FUNCTION Setup model observation point locations.
-
-        Adds model layers:
-
-        * **obs** geom: observation point locations
-
-        Parameters
-        ---------
-        gauges_fn: str, optional
-            Path to observation points geometry file.
-            See :py:meth:`~hydromt.open_vector`, for accepted files.
-        """
-        if gauges_fn is not None:
-            name = self._GEOMS["gauges"]
-            kwargs.update(assert_gtype="Point")
-            gdf = self.data_catalog.get_geodataframe(
-                gauges_fn, geom=self.region, **kwargs
-            ).to_crs(self.crs)
-            self.set_staticgeoms(gdf, name)
-            self.set_config(f"{name}.{name}", f"{name}.xy")
-            self.logger.info(f"{name} set based on {gauges_fn}")
+    def setup_elevation(
+        self,
+        hydrography_fn='merit_hydro',
+        **zonal_stats_kwargs
+    ):
+        rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
+        ds_hyd = self.data_catalog.get_rasterdataset(hydrography_fn,geom=self.region)
+        mdem = ds_hyd['elevtn']
+        zstats = mdem.raster.zonal_stats(rus,'mean')
+        zstats['index'] = (["index"], rus['value'])
+        self.set_response_units(zstats, name='elevtn')
+    
+    def setup_states():
+        pass
+    
+    def setup_config():
+        pass
+    
+    def copy_base_files(self,base_settings_path):
+        for f in os.listdir(os.path.join(base_settings_path)):
+            shutil.copyfile(os.path.join(base_settings_path,f),
+                            os.path.join(self.root,f))
+    
+    def write_filemanager(self):
+        ds_f1 = self.forcing[list(self.forcing.keys())[0]]
+        ts = pd.to_datetime(ds_f1.time[0].values)
+        sim_start = ts.strftime('%Y-%m-%d %H:%M') # TODO: make also configurable
+        
+        ts = pd.to_datetime(ds_f1.time[-1].values)
+        sim_end = ts.strftime('%Y-%m-%d %H:%M') # TODO: make also configurable
+        
+        experiment_id = 'test_hydromt_summa' # TODO: make configurable
+        path_to_settings = os.path.join(self.root)
+        path_to_forcing = os.path.join(self.root) # TODO: make configurable
+        path_to_output = os.path.join(self.root,'output') # TODO: make configurable
+        
+        initial_conditions_nc = 'coldState.nc'
+        attributes_nc = 'attributes.nc'
+        trial_parameters_nc = 'trialParams.nc'
+        forcing_file_list_txt = 'forcingFileList.txt'
+        
+        with open(os.path.join(self.root,'fileManager.txt'), 'w') as fm:    
+            # Header
+            fm.write("controlVersion       'SUMMA_FILE_MANAGER_V3.0.0' !  file manager version \n")
+            
+            # Simulation times
+            fm.write("simStartTime         '{}' ! \n".format(sim_start))
+            fm.write("simEndTime           '{}' ! \n".format(sim_end))
+            fm.write("tmZoneInfo           'utcTime' ! \n")
+            
+            # Prefix for SUMMA outputs
+            fm.write("outFilePrefix        '{}' ! \n".format(experiment_id))
+            
+            # Paths
+            fm.write("settingsPath         '{}/' ! \n".format(path_to_settings))
+            fm.write("forcingPath          '{}/' ! \n".format(path_to_forcing))
+            fm.write("outputPath           '{}/' ! \n".format(path_to_output))
+            
+            # Input file names
+            fm.write("initConditionFile    '{}' ! Relative to settingsPath \n".format(initial_conditions_nc))
+            fm.write("attributeFile        '{}' ! Relative to settingsPath \n".format(attributes_nc))
+            fm.write("trialParamFile       '{}' ! Relative to settingsPath \n".format(trial_parameters_nc))
+            fm.write("forcingListFile      '{}' ! Relative to settingsPath \n".format(forcing_file_list_txt))
+            
+            # Base files (not domain-dependent)
+            fm.write("decisionsFile        'modelDecisions.txt' !  Relative to settingsPath \n")
+            fm.write("outputControlFile    'outputControl.txt' !  Relative to settingsPath \n")
+            fm.write("globalHruParamFile   'localParamInfo.txt' !  Relative to settingsPath \n")
+            fm.write("globalGruParamFile   'basinParamInfo.txt' !  Relative to settingsPatho \n")
+            fm.write("vegTableFile         'TBL_VEGPARM.TBL' ! Relative to settingsPath \n")
+            fm.write("soilTableFile        'TBL_SOILPARM.TBL' ! Relative to settingsPath \n")
+            fm.write("generalTableFile     'TBL_GENPARM.TBL' ! Relative to settingsPath \n")
+            fm.write("noahmpTableFile      'TBL_MPTABLE.TBL' ! Relative to settingsPath \n")        
 
     ## I/O 
 
@@ -173,29 +191,12 @@ class SummaModel(LumpedModel):
             return
         if self.config:  # try to read default if not yet set
             self.write_config()
-        if self._staticmaps:
-            self.write_staticmaps()
+        if self._response_units:
+            self.write_response_units()
         if self._staticgeoms:
             self.write_staticgeoms()
         if self._forcing:
             self.write_forcing()
-
-    def read_staticmaps(self):
-        """Read staticmaps at <root/?/> and parse to xarray Dataset"""
-        # to read gdal raster files use: hydromt.open_mfraster()
-        # to read netcdf use: xarray.open_dataset()
-        if not self._write:
-            # start fresh in read-only mode
-            self._staticmaps = xr.Dataset()
-        self.set_staticmaps(hydromt.open_mfraster(join(self.root, "*.tif")))
-
-    def write_staticmaps(self):
-        """Write staticmaps at <root/?/> in model ready format"""
-        # to write to gdal raster files use: self.staticmaps.raster.to_mapstack()
-        # to write to netcdf use: self.staticmaps.to_netcdf()
-        if not self._write:
-            raise IOError("Model opened in read-only mode")
-        self.staticmaps.raster.to_mapstack(self.root)
 
     def read_staticgeoms(self):
         """Read staticgeoms at <root/?/> and parse to dict of geopandas"""
@@ -223,7 +224,8 @@ class SummaModel(LumpedModel):
 
     def write_forcing(self):
         """write forcing at <root/?/> in model ready format"""
-        pass
+        super().write_forcing
+        # then also create forcing_file_list.txt
         # raise NotImplementedError()
 
     def read_states(self):
