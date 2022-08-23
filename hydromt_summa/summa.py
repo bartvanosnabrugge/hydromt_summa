@@ -175,7 +175,7 @@ class SummaModel(LumpedModel):
         
         experiment_id = 'test_hydromt_summa' # TODO: make configurable
         path_to_settings = os.path.join(self.root)
-        path_to_forcing = os.path.join(self.root) # TODO: make configurable
+        path_to_forcing = os.path.join(self.root,'forcing') # TODO: make configurable
         path_to_output = os.path.join(self.root,'output') # TODO: make configurable
         
         initial_conditions_nc = 'coldState.nc'
@@ -315,7 +315,7 @@ class SummaModel(LumpedModel):
         # then also create forcing_file_list.txt
         with open(os.path.join(self.root,'forcingFileList.txt'), 'w') as ffl:
             for ff in paths:
-                ffl.write(ff+'\n')
+                ffl.write(os.path.basename(ff)+'\n')
 
     def read_states(self):
         """Read states at <root/?/> and parse to dict of xr.DataArray"""
@@ -427,7 +427,7 @@ class SummaModel(LumpedModel):
                 slopeTypeIndex=(["hru"],np.full(num_hru,slopeTypeIndex).astype('int')),
                 soilTypeIndex=(["hru"],self.response_units.soil_classes_count_mode.values.astype('int')),
                 vegTypeIndex=(["hru"],self.response_units.land_classes_count_mode.values.astype('int')),
-                mHeigth=(["hru"],np.full(num_hru,mHeight).astype('float64')),
+                mHeight=(["hru"],np.full(num_hru,mHeight).astype('float64')),
             )
         )
         dsattr.to_netcdf(os.path.join(self.root,'attributes.nc'))
