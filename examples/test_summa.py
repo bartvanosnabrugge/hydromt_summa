@@ -6,9 +6,11 @@ from hydromt.log import setuplog
 import numpy as np
 
 #%%
+hydromt_test_catalogue = os.path.expanduser("~")+r'\.hydromt_data\data\v0.0.6\data_catalog.yml'
+
 root = os.path.join('./dummy_summa')
 mod = SummaModel(root=root, mode="w",
-                  data_libs=[r'c:\Users\osnabrug\.hydromt_data\data\v0.0.6\data_catalog.yml',
+                  data_libs=[hydromt_test_catalogue,
                              './catalog/datacatalog_summa.yml'])
 
 _region = {'subbasin': [[12.6,12.6,12.5], [45.8,46.2,45.95]], 'strord': 7, 'bounds': [12.1, 45.5, 12.9, 46.5]}
