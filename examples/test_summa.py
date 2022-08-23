@@ -6,7 +6,7 @@ from hydromt.log import setuplog
 import numpy as np
 
 #%%
-hydromt_test_catalogue = os.path.expanduser("~")+r'\.hydromt_data\data\v0.0.6\data_catalog.yml'
+hydromt_test_catalogue = os.path.join(os.path.expanduser("~"),'.hydromt_data','data','v0.0.6','data_catalog.yml')
 
 root = os.path.join('./dummy_summa')
 mod = SummaModel(root=root, mode="w",
