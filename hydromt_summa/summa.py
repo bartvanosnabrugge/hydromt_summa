@@ -410,7 +410,7 @@ class SummaModel(LumpedModel):
         num_hru = len(hruIds)
         
         # extract geometries to gdf
-        gdf = workflows.ru_geometry_to_gpd(self.response_units)
+        gdf = hydromt.workflows.ru_geometry_to_gpd(self.response_units)
         
         dsattr = xr.Dataset(
             data_vars=dict(
@@ -420,13 +420,13 @@ class SummaModel(LumpedModel):
                 downHRUindex=(["hru"],self.response_units.down_id.values.astype(int)),
                 longitude=(["hru"],gdf.centroid.x),
                 latitude=(["hru"],gdf.centroid.y),
-                elevation=(["hru"],self.response_units.elevtn.values),
+                elevation=(["hru"],self.response_units.elevtn_mean.values),
                 HRUarea=(["hru"],gdf['geometry'].to_crs({'proj':'cea'}).area),
                 tan_slope=(["hru"],np.full(num_hru,tan_slope).astype('float64')),
                 contourLength=(["hru"],np.full(num_hru,contourLength).astype('float64')),
                 slopeTypeIndex=(["hru"],np.full(num_hru,slopeTypeIndex).astype('int')),
-                soilTypeIndex=(["hru"],self.response_units.soil_mode.values.astype('int')),
-                vegTypeIndex=(["hru"],self.response_units.landclass_mode.values.astype('int')),
+                soilTypeIndex=(["hru"],self.response_units.soil_classes_count_mode.values.astype('int')),
+                vegTypeIndex=(["hru"],self.response_units.land_classes_count_mode.values.astype('int')),
                 mHeigth=(["hru"],np.full(num_hru,mHeight).astype('float64')),
             )
         )
