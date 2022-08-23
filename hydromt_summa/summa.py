@@ -20,6 +20,47 @@ from . import workflows, DATADIR
 
 logger = logging.getLogger(__name__)
 
+# helper functions
+# TODO: save these helper functions somewhere else
+
+import itertools
+
+
+def split_by_chunks(dataset):
+    '''Split dataset in multiple datasets by chunk
+    
+    Notes
+    ------
+    from https://ncar.github.io/esds/posts/2020/writing-multiple-netcdf-files-in-parallel-with-xarray-and-dask/
+    '''
+    chunk_slices = {}
+    for dim, chunks in dataset.chunks.items():
+        slices = []
+        start = 0
+        for chunk in chunks:
+            if start >= dataset.sizes[dim]:
+                break
+            stop = start + chunk
+            slices.append(slice(start, stop))
+            start = stop
+        chunk_slices[dim] = slices
+    for slices in itertools.product(*chunk_slices.values()):
+        selection = dict(zip(chunk_slices.keys(), slices))
+        yield dataset[selection]
+
+def create_filepath(ds, prefix='filename', root_path="."):
+    """
+    Generate a filepath when given an xarray dataset
+    """
+    start = pd.to_datetime(ds.time.data[0]).strftime("%Y-%m-%d-%H-%M-%S")
+    end = pd.to_datetime(ds.time.data[-1]).strftime("%Y-%m-%d-%H-%M-%S")
+    filepath = f'{root_path}/{prefix}_{start}_{end}.nc'
+    return filepath
+
+def get_timestep(ds):
+    dift = ds['time'][1].values-ds['time'][0].values
+    secs = int(dift/np.timedelta64(1,'s'))
+    return secs
 
 class SummaModel(LumpedModel):
     """This is the class for the SUMMA hydrological model in HydroMT"""
@@ -117,7 +158,9 @@ class SummaModel(LumpedModel):
     def setup_config():
         pass
     
-    def copy_base_files(self,base_settings_path):
+    def copy_base_files(self,base_settings_path=None):
+        if not base_settings_path:
+            base_settings_path = os.path.join(self._DATADIR,'base_settings')
         for f in os.listdir(os.path.join(base_settings_path)):
             shutil.copyfile(os.path.join(base_settings_path,f),
                             os.path.join(self.root,f))
@@ -197,6 +240,8 @@ class SummaModel(LumpedModel):
             self.write_staticgeoms()
         if self._forcing:
             self.write_forcing()
+        self.copy_base_files()
+        self.write_filemanager()
 
     def read_staticgeoms(self):
         """Read staticgeoms at <root/?/> and parse to dict of geopandas"""
@@ -224,9 +269,53 @@ class SummaModel(LumpedModel):
 
     def write_forcing(self):
         """write forcing at <root/?/> in model ready format"""
-        super().write_forcing
+        if not self._write:
+            raise IOError("Model opened in read-only mode")
+        elif not self._forcing:
+            self.logger.warning("No model forcing to write - Exiting")
+            return
+        else:
+            self.logger.info("Write model forcing files")
+
+        fn = os.path.join(self.root, "forcing")
+        if not os.path.isdir(fn):
+            os.makedirs(fn)
+        # prepare dataset for writing    
+        ds = xr.Dataset(self.forcing)
+        ds = ds.rename_dims({'index':'hru'})
+        ds = ds.rename_vars({'index':'hru'})
+        
+        # rename variables to SUMMA standard
+        # TODO: rename from hydromt standards
+        new_names = []
+        for n in list(self.forcing):
+            if '_' in n:
+                n = n.split('_')[0] # strip of any zonal stats addendums to name
+            new_names.append(n)
+        ds = ds.rename_vars(dict(zip(self.forcing,new_names)))
+        
+        # TODO: implement sorting based on GRUs and HRUs
+        
+        # add data_step variable
+        ds['data_step'] = get_timestep(ds)
+        
+        # add hruid variable
+        ds['hruId'] = ds['hru'].astype(np.float64)
+        
+        
+        # write forcing, over multiple files depending on chunking
+        # keep only chunks in time
+        ds = ds.chunk({'hru':len(ds.hru)})
+        
+        # then write file for each chunk
+        datasets = list(split_by_chunks(ds))        
+        paths = [create_filepath(ds,'forcing',fn) for ds in datasets]
+        xr.save_mfdataset(datasets=datasets, paths=paths)
+        
         # then also create forcing_file_list.txt
-        # raise NotImplementedError()
+        with open(os.path.join(self.root,'forcingFileList.txt'), 'w') as ffl:
+            for ff in paths:
+                ffl.write(ff+'\n')
 
     def read_states(self):
         """Read states at <root/?/> and parse to dict of xr.DataArray"""
@@ -235,9 +324,114 @@ class SummaModel(LumpedModel):
 
     def write_states(self):
         """write states at <root/?/> in model ready format"""
-        pass
-        # raise NotImplementedError()
+        # --- Define the dimensions and fill values
+        # from CWARHM: Knoben et al. 2022.
+        # Specify the dimensions
+        nSoil   = 8         # number of soil layers
+        nSnow   = 0         # assume no snow layers currently exist
+        midSoil = 8         # midpoint of soil layer
+        midToto = 8         # total number of midpoints for snow+soil layers
+        ifcToto = midToto+1 # total number of layer boundaries
+        scalarv = 1         # auxiliary dimension variable
 
+        # Layer variables
+        mLayerDepth  = np.asarray([0.025, 0.075, 0.15, 0.25, 0.5, 0.5, 1, 1.5])
+        iLayerHeight = np.asarray([0, 0.025, 0.1, 0.25, 0.5, 1, 1.5, 2.5, 4])
+
+        # States
+        scalarCanopyIce      = 0      # Current ice storage in the canopy
+        scalarCanopyLiq      = 0      # Current liquid water storage in the canopy
+        scalarSnowDepth      = 0      # Current snow depth
+        scalarSWE            = 0      # Current snow water equivalent
+        scalarSfcMeltPond    = 0      # Current ponded melt water
+        scalarAquiferStorage = 1.0    # Current aquifer storage
+        scalarSnowAlbedo     = 0      # Snow albedo
+        scalarCanairTemp     = 283.16 # Current temperature in the canopy airspace
+        scalarCanopyTemp     = 283.16 # Current temperature of the canopy 
+        mLayerTemp           = 283.16 # Current temperature of each layer; assumed that all layers are identical
+        mLayerVolFracIce     = 0      # Current ice storage in each layer; assumed that all layers are identical
+        mLayerVolFracLiq     = 0.2    # Current liquid water storage in each layer; assumed that all layers are identical
+        mLayerMatricHead     = -1.0   # Current matric head in each layer; assumed that all layers are identical
+        
+        # get timestep from forcing
+        sample_forcing = self.forcing[list(self.forcing)[0]]
+        dt_init = get_timestep(sample_forcing)
+        # get hruIds (indexes)
+        hruIds = self.response_units.index.values.astype(int)
+        num_hru = len(hruIds)
+        
+        dsinit = xr.Dataset(
+            data_vars=dict(
+                hruId=(["hru"],hruIds),
+                dt_init=(["scalarv","hru"],np.full((scalarv,num_hru),dt_init).astype('float64')),
+                nSoil=(["scalarv","hru"],np.full((scalarv,num_hru),nSoil)),
+                nSnow=(["scalarv","hru"],np.full((scalarv,num_hru),nSnow)),
+                scalarCanopyIce=(["scalarv","hru"],np.full((scalarv,num_hru),scalarCanopyIce).astype('float64')),
+                scalarCanopyLiq=(["scalarv","hru"],np.full((scalarv,num_hru),scalarCanopyLiq).astype('float64')),
+                scalarSnowDepth=(["scalarv","hru"],np.full((scalarv,num_hru),scalarSnowDepth).astype('float64')),
+                scalarSWE=(["scalarv","hru"],np.full((scalarv,num_hru),scalarSWE).astype('float64')),
+                scalarSfcMeltPond=(["scalarv","hru"],np.full((scalarv,num_hru),scalarSfcMeltPond).astype('float64')),
+                scalarAquiferStorage=(["scalarv","hru"],np.full((scalarv,num_hru),scalarAquiferStorage).astype('float64')),
+                scalarSnowAlbedo=(["scalarv","hru"],np.full((scalarv,num_hru),scalarSnowAlbedo).astype('float64')),
+                scalarCanairTemp=(["scalarv","hru"],np.full((scalarv,num_hru),scalarCanairTemp).astype('float64')),
+                scalarCanopyTemp=(["scalarv","hru"],np.full((scalarv,num_hru),scalarCanopyTemp).astype('float64')),
+                
+                mLayerTemp=(["midToto","hru"],np.full((midToto,num_hru),mLayerTemp).astype('float64')),
+                mLayerVolFracIce=(["midToto","hru"],np.full((midToto,num_hru),mLayerVolFracIce).astype('float64')),
+                mLayerVolFracLiq=(["midToto","hru"],np.full((midToto,num_hru),mLayerVolFracLiq).astype('float64')),
+                mLayerDepth=(["midToto","hru"],np.stack([mLayerDepth for i in range(num_hru)],axis=1).astype('float64')),
+                
+                mLayerMatricHead=(["midSoil","hru"],np.full((midSoil,num_hru),mLayerMatricHead).astype('float64')),
+                
+                iLayerHeight=(["ifcToto","hru"],np.stack([iLayerHeight for i in range(num_hru)],axis=1).astype('float64')),
+            )
+        )
+        
+        dsinit.to_netcdf(os.path.join(self.root,'coldState.nc'))
+
+    def write_trial_params(self):
+        hruIds = self.response_units.index.values.astype(int)
+        num_hru = len(hruIds)
+        dstrial = xr.Dataset(
+            data_vars=dict(
+                hruId = (["hru"],self.response_units.index.values.astype(int)),
+                maxstep = (["hru"],np.full(num_hru,900).astype('float64'))
+            )
+        )
+        dstrial.to_netcdf(os.path.join(self.root,'trialParams.nc'))
+    
+    def write_attributes(self):
+        tan_slope = 0.1 # [-] TODO: make configurable
+        contourLength = 30 # [m] TODO; make configurable
+        slopeTypeIndex = 1 # [-] TODO: make configurable
+        mHeight = 3 # [m] TODO: make configurable
+        
+        hruIds = self.response_units.index.values.astype(int)
+        num_hru = len(hruIds)
+        
+        # extract geometries to gdf
+        gdf = workflows.ru_geometry_to_gpd(self.response_units)
+        
+        dsattr = xr.Dataset(
+            data_vars=dict(
+                hruId=(["hru"],hruIds),
+                gruId=(["gru"],hruIds), # TODO: work out example with different GRUS and HRUS (Bow at Banff example)
+                hru2gruId=(["hru"],hruIds),
+                downHRUindex=(["hru"],self.response_units.down_id.values.astype(int)),
+                longitude=(["hru"],gdf.centroid.x),
+                latitude=(["hru"],gdf.centroid.y),
+                elevation=(["hru"],self.response_units.elevtn.values),
+                HRUarea=(["hru"],gdf['geometry'].to_crs({'proj':'cea'}).area),
+                tan_slope=(["hru"],np.full(num_hru,tan_slope).astype('float64')),
+                contourLength=(["hru"],np.full(num_hru,contourLength).astype('float64')),
+                slopeTypeIndex=(["hru"],np.full(num_hru,slopeTypeIndex).astype('int')),
+                soilTypeIndex=(["hru"],self.response_units.soil_mode.values.astype('int')),
+                vegTypeIndex=(["hru"],self.response_units.landclass_mode.values.astype('int')),
+                mHeigth=(["hru"],np.full(num_hru,mHeight).astype('float64')),
+            )
+        )
+        dsattr.to_netcdf(os.path.join(self.root,'attributes.nc'))
+        
     def read_results(self):
         """Read results at <root/?/> and parse to dict of xr.DataArray"""
         return self._results

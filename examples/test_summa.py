@@ -37,5 +37,10 @@ mod.setup_elevation()
 
 mod.write_response_units()
 
-#%% try to write model specific files
+#%% write model specific files
 mod.write_filemanager()
+mod.copy_base_files()
+mod.write_forcing()
+mod.write_states()
+mod.write_trial_params()
+mod.write_attributes()
