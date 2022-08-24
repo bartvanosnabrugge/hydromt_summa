@@ -101,7 +101,7 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs    
     ):
         response_units = hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=response_units)
+        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=response_units,buffer=2)
         ds_zstats = ds_forcing.raster.zonal_stats(response_units,'mean',**zonal_stats_kwargs)
         ds_zstats['index'] = (["index"], response_units['value'])
         self.set_forcing(ds_zstats, name="forcing")
