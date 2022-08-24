@@ -282,8 +282,14 @@ class SummaModel(LumpedModel):
             os.makedirs(fn)
         # prepare dataset for writing    
         ds = xr.Dataset(self.forcing)
+
         ds = ds.rename_dims({'index':'hru'})
         ds = ds.rename_vars({'index':'hru'})
+        # drop the hru coordinate
+        # ds = ds.drop_vars('hru')
+        
+        # transpose to adhere to (time,hru) order
+        ds = ds.transpose()
         
         # rename variables to SUMMA standard
         # TODO: rename from hydromt standards
