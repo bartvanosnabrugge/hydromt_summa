@@ -112,7 +112,7 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs
     ):
         rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_soil = self.data_catalog.get_rasterdataset(soilclass_fn,geom=rus)
+        ds_soil = self.data_catalog.get_rasterdataset(soilclass_fn,geom=rus,buffer=2)
         ds_zstats = ds_soil.raster.zonal_stats_per_class(rus,np.unique(ds_soil),
                         stat='count', class_dim_name='soil')
         ds_zstats['index'] = (["index"], rus['value'])
@@ -129,7 +129,7 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs
     ):
         rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_class = self.data_catalog.get_rasterdataset(landclass_fn,geom=rus)
+        ds_class = self.data_catalog.get_rasterdataset(landclass_fn,geom=rus,buffer=2)
         ds_zstats = ds_class.raster.zonal_stats_per_class(rus,np.unique(ds_class),
                         stat='count', class_dim_name='landclass')
         ds_zstats['index'] = (["index"], rus['value'])
@@ -146,7 +146,7 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs
     ):
         rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_hyd = self.data_catalog.get_rasterdataset(hydrography_fn,geom=self.region)
+        ds_hyd = self.data_catalog.get_rasterdataset(hydrography_fn,geom=self.region,buffer=2)
         mdem = ds_hyd['elevtn']
         zstats = mdem.raster.zonal_stats(rus,'mean')
         zstats['index'] = (["index"], rus['value'])
