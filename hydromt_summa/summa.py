@@ -98,10 +98,11 @@ class SummaModel(LumpedModel):
     def setup_forcing(
         self,
         forcing_fn,
+        get_rasterdataset_kwargs = {},
         **zonal_stats_kwargs    
     ):
         response_units = hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=response_units,buffer=2)
+        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=response_units,buffer=2,**get_rasterdataset_kwargs)
         ds_zstats = ds_forcing.raster.zonal_stats(response_units,'mean',**zonal_stats_kwargs)
         ds_zstats['index'] = (["index"], response_units['value'])
         self.set_forcing(ds_zstats, name="forcing")
@@ -117,11 +118,11 @@ class SummaModel(LumpedModel):
                         stat='count', class_dim_name='soil')
         ds_zstats['index'] = (["index"], rus['value'])
         # and calculate fractions
-        fracs = hydromt.workflows.fracs(ds_zstats,'soil_classes_count','soil')
-        soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'soil_classes_count','soil')
+        fracs = hydromt.workflows.fracs(ds_zstats,'tax_usda_count','soil')
+        soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'tax_usda_count','soil')
         
-        self.set_response_units(fracs, name='soil_fraction')
-        self.set_response_units(soil_mode, name='soil_mode')
+        self.set_response_units(fracs, name='tax_usda_fraction')
+        self.set_response_units(soil_mode, name='tax_usda_mode')
         
     def setup_landclass(
         self,
@@ -129,13 +130,22 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs
     ):
         rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_class = self.data_catalog.get_rasterdataset(landclass_fn,geom=rus,buffer=2)
-        ds_zstats = ds_class.raster.zonal_stats_per_class(rus,np.unique(ds_class),
+        ds_land = self.data_catalog.get_rasterdataset(landclass_fn,geom=rus,buffer=2)
+        ds_land_stack = ds_land.to_stacked_array(new_dim='years',sample_dims=['x','y'])
+        # calculate mode across years dimension, stored in np.array
+        modestat = stats.mode(ds_land_stack,axis=2)[0].squeeze()
+        # create data array from np.array
+        ds_landclass_mode = xr.DataArray(modestat,{'y':ds_land.y,'x': ds_land.x})
+        ds_landclass_mode.name = 'landclass'
+        # generate class list from classes in array
+        class_list = np.unique(ds_landclass_mode)
+        
+        ds_zstats = ds_landclass_mode.raster.zonal_stats_per_class(rus,class_list,
                         stat='count', class_dim_name='landclass')
         ds_zstats['index'] = (["index"], rus['value'])
         # and calculate fractions
-        fracs = hydromt.workflows.fracs(ds_zstats,'land_classes_count','landclass')
-        soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'land_classes_count','landclass')
+        fracs = hydromt.workflows.fracs(ds_zstats,'landclass_count','landclass')
+        soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'landclass_count','landclass')
         
         self.set_response_units(fracs, name='landclass_fraction')
         self.set_response_units(soil_mode, name='landclass_mode')
@@ -431,8 +441,8 @@ class SummaModel(LumpedModel):
                 tan_slope=(["hru"],np.full(num_hru,tan_slope).astype('float64')),
                 contourLength=(["hru"],np.full(num_hru,contourLength).astype('float64')),
                 slopeTypeIndex=(["hru"],np.full(num_hru,slopeTypeIndex).astype('int')),
-                soilTypeIndex=(["hru"],self.response_units.soil_classes_count_mode.values.astype('int')),
-                vegTypeIndex=(["hru"],self.response_units.land_classes_count_mode.values.astype('int')),
+                soilTypeIndex=(["hru"],self.response_units.tax_usda_count_mode.values.astype('int')),
+                vegTypeIndex=(["hru"],self.response_units.landclass_count_mode.values.astype('int')),
                 mHeight=(["hru"],np.full(num_hru,mHeight).astype('float64')),
             )
         )
@@ -447,6 +457,13 @@ class SummaModel(LumpedModel):
         """write results at <root/?/> in model ready format"""
         pass
         # raise NotImplementedError()
+    
+    def run(self, summa_bin):
+        summa_bin = summa_bin
+        fileman = os.path.join(self.root,'fileManager.txt')
+        ex_string = "{} -m {}".format(summa_bin, fileman)
+        print(" executable string is {}".format(ex_string))
+        os.system(ex_string)
 
     @property
     def crs(self):
