@@ -18,6 +18,8 @@ from hydromt.models.model_lumped import LumpedModel
 from hydromt import gis_utils, io
 from . import workflows, DATADIR
 
+import pysumma as ps
+
 logger = logging.getLogger(__name__)
 
 # helper functions
@@ -102,7 +104,7 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs    
     ):
         response_units = hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=response_units,buffer=2,**get_rasterdataset_kwargs)
+        ds_forcing = self.data_catalog.get_rasterdataset(forcing_fn,geom=self.region,buffer=2,**get_rasterdataset_kwargs)
         ds_zstats = ds_forcing.raster.zonal_stats(response_units,'mean',**zonal_stats_kwargs)
         ds_zstats['index'] = (["index"], response_units['value'])
         self.set_forcing(ds_zstats, name="forcing")
@@ -113,7 +115,7 @@ class SummaModel(LumpedModel):
         **zonal_stats_kwargs
     ):
         rus =  hydromt.workflows.ru_geometry_to_gpd(self.response_units)
-        ds_soil = self.data_catalog.get_rasterdataset(soilclass_fn,geom=rus,buffer=2)
+        ds_soil = self.data_catalog.get_rasterdataset(soilclass_fn,geom=self.region,buffer=2)
         ds_zstats = ds_soil.raster.zonal_stats_per_class(rus,np.unique(ds_soil),
                         stat='count', class_dim_name='soil')
         ds_zstats['index'] = (["index"], rus['value'])
@@ -121,6 +123,7 @@ class SummaModel(LumpedModel):
         fracs = hydromt.workflows.fracs(ds_zstats,'tax_usda_count','soil')
         soil_mode = hydromt.workflows.ds_class_mode(ds_zstats,'tax_usda_count','soil')
         
+        self.set_response_units(ds_zstats,name='tax_usda_count')
         self.set_response_units(fracs, name='tax_usda_fraction')
         self.set_response_units(soil_mode, name='tax_usda_mode')
         
@@ -133,7 +136,7 @@ class SummaModel(LumpedModel):
         ds_land = self.data_catalog.get_rasterdataset(landclass_fn,geom=rus,buffer=2)
         ds_land_stack = ds_land.to_stacked_array(new_dim='years',sample_dims=['x','y'])
         # calculate mode across years dimension, stored in np.array
-        modestat = stats.mode(ds_land_stack,axis=2)[0].squeeze()
+        modestat = stats.mode(ds_land_stack,axis=2,nan_policy='omit')[0].squeeze()
         # create data array from np.array
         ds_landclass_mode = xr.DataArray(modestat,{'y':ds_land.y,'x': ds_land.x})
         ds_landclass_mode.name = 'landclass'
@@ -228,12 +231,14 @@ class SummaModel(LumpedModel):
 
     ## I/O 
 
-    def read(self):
+    def read(self,summa_exe='summa.exe',config_dir=''):
         """Method to read the complete model schematization and configuration from file."""
         self.logger.info(f"Reading model data from {self.root}")
-        self.read_config()
-        self.read_staticmaps()
-        self.read_staticgeoms()
+        #self.read_config()
+        #self.read_staticmaps()
+        #self.read_staticgeoms()
+        # use pysumma simulation class to read all text files
+        self.Simulation = ps.Simulation(summa_exe,os.path.join(self.root,'fileManager.txt'),config_dir=config_dir)
 
     def write(self):
         """Method to write the complete model schematization and configuration to file."""
@@ -242,16 +247,15 @@ class SummaModel(LumpedModel):
         if not self._write:
             self.logger.warning("Cannot write in read-only mode")
             return
-        if self.config:  # try to read default if not yet set
-            self.write_config()
         if self._response_units:
             self.write_response_units()
-        if self._staticgeoms:
-            self.write_staticgeoms()
         if self._forcing:
             self.write_forcing()
-        self.copy_base_files()
-        self.write_filemanager()
+        if hasattr(self,'Simulation'):
+            self.Simulation._write_configuration()
+        else:
+            self.copy_base_files()
+            self.write_filemanager()
 
     def read_staticgeoms(self):
         """Read staticgeoms at <root/?/> and parse to dict of geopandas"""
@@ -310,7 +314,7 @@ class SummaModel(LumpedModel):
             new_names.append(n)
         ds = ds.rename_vars(dict(zip(self.forcing,new_names)))
         
-        # TODO: implement sorting based on GRUs and HRUs
+        # TODO: implement sorting based on GRUs and HRUs - solution sort shapes first
         
         # add data_step variable
         ds['data_step'] = get_timestep(ds)
@@ -326,7 +330,7 @@ class SummaModel(LumpedModel):
         # then write file for each chunk
         datasets = list(split_by_chunks(ds))        
         paths = [create_filepath(ds,'forcing',fn) for ds in datasets]
-        xr.save_mfdataset(datasets=datasets, paths=paths)
+        xr.save_mfdataset(datasets=datasets, paths=paths,engine="netcdf4") # on GRAHAM currently only works with hdf5 engine
         
         # then also create forcing_file_list.txt
         with open(os.path.join(self.root,'forcingFileList.txt'), 'w') as ffl:
@@ -465,6 +469,8 @@ class SummaModel(LumpedModel):
         print(" executable string is {}".format(ex_string))
         os.system(ex_string)
 
+       
+        
     @property
     def crs(self):
         return pyproj.CRS.from_epsg(self.get_config("global.epsg", fallback=4326))

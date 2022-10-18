@@ -1,9 +1,9 @@
 ! -------------
 !  attributes
 ! -------------
-hruId
-latitude
-longitude     
+!hruId
+!latitude
+!longitude     
 !
 ! -----------
 !  forcings
@@ -31,6 +31,3 @@ scalarTotalRunoff     | 24
 scalarNetRadiation    | 24 
 scalarLatHeatTotal    | 24 
 scalarSenHeatTotal    | 24
-
-
-
